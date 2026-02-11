@@ -262,19 +262,34 @@ export default function App() {
 
       const validTracks = allItems.filter(i => i.track && i.track.id && !i.track.is_local);
 
-      // Fetch audio features in batches of 100
+      // Fetch audio features in batches of 100 (may fail due to API restrictions)
       const trackIds = validTracks.map(i => i.track.id);
       let features = {};
-      for (let i = 0; i < trackIds.length; i += 100) {
-        const batch = trackIds.slice(i, i + 100);
-        const data = await spotifyFetch(
-          `https://api.spotify.com/v1/audio-features?ids=${batch.join(",")}`
-        );
-        if (data.audio_features) {
-          data.audio_features.forEach(f => {
-            if (f) features[f.id] = f;
-          });
+      let audioFeaturesAvailable = true;
+      try {
+        for (let i = 0; i < trackIds.length; i += 100) {
+          const batch = trackIds.slice(i, i + 100);
+          const resp = await fetch(
+            `https://api.spotify.com/v1/audio-features?ids=${batch.join(",")}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (resp.status === 403) {
+            audioFeaturesAvailable = false;
+            break;
+          }
+          const data = await resp.json();
+          if (data.audio_features) {
+            data.audio_features.forEach(f => {
+              if (f) features[f.id] = f;
+            });
+          }
         }
+      } catch (e) {
+        audioFeaturesAvailable = false;
+      }
+
+      if (!audioFeaturesAvailable) {
+        setError("Audio Features API nicht verfügbar (Spotify-Einschränkung). Tracks werden nach Popularität sortiert.");
       }
 
       const enriched = validTracks.map(item => {
@@ -286,11 +301,13 @@ export default function App() {
           name: t.name,
           artist: (t.artists || []).map(a => a.name).join(", "),
           albumArt: t.album?.images?.[2]?.url || t.album?.images?.[0]?.url,
-          energy: f.energy ?? null,
+          energy: f.energy ?? (t.popularity ? t.popularity / 100 : null),
           bpm: f.tempo ? Math.round(f.tempo) : null,
           danceability: f.danceability ?? null,
           valence: f.valence ?? null,
           duration_ms: t.duration_ms,
+          popularity: t.popularity,
+          hasAudioFeatures: !!f.energy,
         };
       });
 
